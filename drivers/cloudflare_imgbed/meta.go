@@ -7,26 +7,19 @@ import (
 
 type Addition struct {
 	driver.RootPath
-	Address          string `json:"address" type:"text" required:"true" default:"" help:"API domain, e.g. https://img.example.com"`
-	Token            string `json:"token" type:"text" required:"true" default:"" help:"API authentication token"`
-	SmallChannelName string `json:"smallChannelName" type:"text" required:"false" default:"" help:"Upload channel name for files smaller than 20MB"`
-	LargeChannelName string `json:"largeChannelName" type:"text" required:"false" default:"" help:"Upload channel name for files larger than or equal to 20MB"`
-	LargeChannelType string `json:"largeChannelType" type:"select" required:"false" default:"" options:",huggingface" help:"Upload channel type for large files, e.g. huggingface"`
-	UploadThread     int    `json:"uploadThread" type:"number" required:"false" default:"3" help:"Threads of chunked upload for HuggingFace direct upload"`
+	Address          string `json:"address" type:"text" required:"true" help:"图床后端 API 地址，例如 https://img.example.com"`
+	Token            string `json:"token" type:"text" required:"true" help:"身份认证 Token"`
+	SmallChannelName string `json:"smallChannelName" type:"text" help:"普通文件(通常<20MB)上传使用的渠道名称"`
+	LargeChannelName string `json:"largeChannelName" type:"text" help:"大文件上传使用的渠道名称"`
+	LargeChannelType string `json:"largeChannelType" type:"select" options:",huggingface" help:"大文件渠道的特殊类型（如需直传 HuggingFace，请选 huggingface）"`
+	UploadThread     int    `json:"uploadThread" type:"number" default:"3" help:"HuggingFace 分片直传时的并发线程数"`
 }
 
 var config = driver.Config{
-	Name:              "cloudflare_imgbed",
-	LocalSort:         false,
-	OnlyProxy:         false,
-	NoCache:           false,
-	NoUpload:          false,
-	NeedMs:            false,
-	DefaultRoot:       "/",
-	CheckStatus:       false,
-	Alert:             "",
-	NoOverwriteUpload: false,
-	NoLinkURL:         false,
+	Name:        "cloudflare_imgbed",
+	LocalSort:   true,
+	NoUpload:    false,
+	DefaultRoot: "/",
 }
 
 func init() {

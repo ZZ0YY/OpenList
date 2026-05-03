@@ -18,15 +18,15 @@ import (
 )
 
 const (
-	ListApi            = "/api/manage/list"
-	UploadApi          = "/upload"
-	HFGetUrlApi        = "/upload/huggingface/getUploadUrl"
-	HFCommitApi        = "/upload/huggingface/commitUpload"
-	hfDirectThreshold  int64 = 20 * 1024 * 1024
-	fileSampleSize     = 512
+	ListApi           = "/api/manage/list"
+	UploadApi         = "/upload"
+	HFGetUrlApi       = "/upload/huggingface/getUploadUrl"
+	HFCommitApi       = "/upload/huggingface/commitUpload"
+	hfDirectThreshold int64 = 20 * 1024 * 1024
+	fileSampleSize    = 512 // HF 申请上传地址时需提供文件前 512 字节的 Sample
 )
 
-// doRequest 是所有API请求的统一入口，包含重试、错误解析和日志记录。
+// doRequest 通用请求封装，包含重试和 API 错误解析
 func (d *CFImgBed) doRequest(method, urlPath string, callback func(*resty.Request), resp interface{}) ([]byte, error) {
 	maxRetries := 3
 	for i := 0; i < maxRetries; i++ {
@@ -61,53 +61,43 @@ func (d *CFImgBed) doRequest(method, urlPath string, callback func(*resty.Reques
 		}
 
 		if res.StatusCode() == 429 {
-			sleep := time.Duration(i+1) * 2 * time.Second
-			log.Warnf("rate limited on %s %s, retrying in %v", method, urlPath, sleep)
-			time.Sleep(sleep)
+			time.Sleep(time.Duration(i+1) * 2 * time.Second)
 			continue
 		}
 
 		if res.IsError() {
-			return nil, fmt.Errorf("HTTP %d on %s %s", res.StatusCode(), method, urlPath)
+			return nil, fmt.Errorf("HTTP %d", res.StatusCode())
 		}
 		return body, nil
 	}
-	return nil, fmt.Errorf("max retries exceeded for %s %s", method, urlPath)
+	return nil, fmt.Errorf("max retries exceeded")
 }
 
-// 【新增】合并前置数据准备：优先复用底层哈希，降低读取 I/O，并一并获取 fileSample
+// prepareHFUploadData 为 HF 直传计算 SHA256 哈希并提取头部样本数据
 func prepareHFUploadData(file model.FileStreamer) (string, string, error) {
-	// HF 直传和分片需要 Seek，因此必须要缓存（且因为只调用一次，放这里很安全）
 	if file.GetFile() == nil {
 		if _, err := file.CacheFullAndWriter(nil, nil); err != nil {
-			return "", "", fmt.Errorf("cache file for HF upload: %w", err)
+			return "", "", err
 		}
 	}
 
 	cached := file.GetFile()
 
-	// 1. 获取 SHA256：优先尝试从 OpenList 底层缓存对象中提取
+	// 优先从 HashInfo 获取，避免重复全量读取文件
 	sha256Hex := file.GetHash().GetHash(utils.SHA256)
 	if len(sha256Hex) == 0 {
-		log.Debug("SHA256 not found in HashInfo, calculating from cached file")
-		if _, err := cached.Seek(0, io.SeekStart); err != nil {
-			return "", "", fmt.Errorf("seek file for sha256: %w", err)
-		}
+		cached.Seek(0, io.SeekStart)
 		hash := sha256.New()
-		if _, err := io.Copy(hash, cached); err != nil {
-			return "", "", fmt.Errorf("calculate SHA256: %w", err)
-		}
+		io.Copy(hash, cached)
 		sha256Hex = hex.EncodeToString(hash.Sum(nil))
 	}
 
-	// 2. 获取 fileSample：仅读取前 512 字节
-	if _, err := cached.Seek(0, io.SeekStart); err != nil {
-		return "", "", fmt.Errorf("seek file for sample: %w", err)
-	}
+	// 提取前 512 字节作为样本
+	cached.Seek(0, io.SeekStart)
 	sampleBuf := make([]byte, fileSampleSize)
 	n, err := io.ReadFull(cached, sampleBuf)
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		return "", "", fmt.Errorf("read file sample: %w", err)
+		return "", "", err
 	}
 	sampleBase64 := base64.StdEncoding.EncodeToString(sampleBuf[:n])
 
@@ -140,8 +130,8 @@ func stripRootPrefix(p, rootPath string) string {
 	return p
 }
 
-// 辅助函数：安全转义 MIME Header 中的特殊字符
 var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
+
 func escapeQuotes(s string) string {
 	return quoteEscaper.Replace(s)
 }

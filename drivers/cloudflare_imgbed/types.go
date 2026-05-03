@@ -7,53 +7,11 @@ import (
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
-	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
-
-// ============================================================
-// model.Obj 实现 — File / Dir
-// ============================================================
-
-type File struct {
-	path    string
-	name    string
-	size    int64
-	modTime time.Time
-	mime    string
-}
-
-func (f *File) GetPath() string     { return f.path }
-func (f *File) GetName() string     { return f.name }
-func (f *File) ModTime() time.Time  { return f.modTime }
-func (f *File) CreateTime() time.Time { return f.modTime }
-func (f *File) GetSize() int64      { return f.size }
-func (f *File) IsDir() bool         { return false }
-func (f *File) GetID() string       { return f.path }
-func (f *File) GetHash() utils.HashInfo { return utils.HashInfo{} }
-
-type Dir struct {
-	path string
-	name string
-}
-
-func (d *Dir) GetPath() string     { return d.path }
-func (d *Dir) GetName() string     { return d.name }
-func (d *Dir) ModTime() time.Time  { return time.Time{} }
-func (d *Dir) CreateTime() time.Time { return time.Time{} }
-func (d *Dir) GetSize() int64      { return 0 }
-func (d *Dir) IsDir() bool         { return true }
-func (d *Dir) GetID() string       { return d.path }
-func (d *Dir) GetHash() utils.HashInfo { return utils.HashInfo{} }
-
-var _ model.Obj = (*File)(nil)
-var _ model.Obj = (*Dir)(nil)
-
-// ============================================================
-// 列表 API 响应结构体
-// ============================================================
 
 const listPageSize = 1000
 
+// ListResponse 列表接口响应
 type ListResponse struct {
 	Files       []FileItem `json:"files"`
 	Directories []string   `json:"directories"`
@@ -61,31 +19,29 @@ type ListResponse struct {
 
 type FileItem struct {
 	Name     string                 `json:"name"`
-	Metadata map[string]interface{} `json:"metadata"`
+	Metadata map[string]interface{} `json:"metadata"` // 存储文件大小、哈希、时间戳等
 }
-
-// ============================================================
-// 上传 API 响应结构体
-// ============================================================
 
 type apiError struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
 }
 
+// standardUploadResp 标准上传成功返回的数组
 type standardUploadResp []struct {
 	Src string `json:"src"`
 }
 
+// hfGetUrlResp 获取 HF 直传授权地址的响应
 type hfGetUrlResp struct {
 	Success       bool          `json:"success"`
 	FullID        string        `json:"fullId"`
 	FilePath      string        `json:"filePath"`
 	ChannelName   string        `json:"channelName"`
 	Repo          string        `json:"repo"`
-	NeedsLfs      bool          `json:"needsLfs"`
-	AlreadyExists bool          `json:"alreadyExists"`
-	Oid           string        `json:"oid"`
+	NeedsLfs      bool          `json:"needsLfs"`      // 是否需要进行 LFS 物理上传
+	AlreadyExists bool          `json:"alreadyExists"` // 是否秒传成功
+	Oid           string        `json:"oid"`           // Git LFS 对象 ID (SHA256)
 	UploadAction  *UploadAction `json:"uploadAction"`
 }
 
@@ -101,10 +57,7 @@ type hfCommitResp struct {
 	FullID  string `json:"fullId"`
 }
 
-// ============================================================
-// 元数据辅助工具函数
-// ============================================================
-
+// 辅助函数：从 map 中安全提取字符串/数值
 func getString(m map[string]interface{}, keys ...string) string {
 	for _, k := range keys {
 		if v, ok := m[k]; ok {
@@ -138,33 +91,34 @@ func getInt64(m map[string]interface{}, keys ...string) int64 {
 	return 0
 }
 
-func parseFile(item FileItem) *File {
+func parseFile(item FileItem) *model.Object {
 	name := path.Base(item.Name)
 	var size int64
 	var modTime time.Time
-	var mime string
 
 	if item.Metadata != nil {
 		size = getInt64(item.Metadata, "FileSizeBytes", "File-Size")
-		mime = getString(item.Metadata, "FileType", "File-Mime")
 		ts := getInt64(item.Metadata, "TimeStamp")
 		if ts > 0 {
 			modTime = time.UnixMilli(ts)
 		}
 	}
 
-	return &File{
-		path:    item.Name,
-		name:    name,
-		size:    size,
-		modTime: modTime,
-		mime:    mime,
+	return &model.Object{
+		ID:       item.Name,
+		Path:     item.Name,
+		Name:     name,
+		Size:     size,
+		Modified: modTime,
+		IsFolder: false,
 	}
 }
 
-func parseDir(dirPath string) *Dir {
-	return &Dir{
-		path: dirPath,
-		name: path.Base(dirPath),
+func parseDir(dirPath string) *model.Object {
+	return &model.Object{
+		ID:       dirPath,
+		Path:     dirPath,
+		Name:     path.Base(dirPath),
+		IsFolder: true,
 	}
 }
