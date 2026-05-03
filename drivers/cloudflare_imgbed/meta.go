@@ -12,6 +12,7 @@ type Addition struct {
 	SmallChannelName string `json:"smallChannelName" type:"text" required:"false" default:"" help:"Upload channel name for files smaller than 20MB"`
 	LargeChannelName string `json:"largeChannelName" type:"text" required:"false" default:"" help:"Upload channel name for files larger than or equal to 20MB"`
 	LargeChannelType string `json:"largeChannelType" type:"select" required:"false" default:"" options:",huggingface" help:"Upload channel type for large files, e.g. huggingface"`
+	UploadThread     int    `json:"uploadThread" type:"number" required:"false" default:"3" help:"Threads of chunked upload for HuggingFace direct upload"`
 }
 
 var config = driver.Config{

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
 )
@@ -48,7 +49,6 @@ func (d *CFImgBed) doRequest(method, urlPath string, callback func(*resty.Reques
 		}
 
 		body := res.Body()
-		// 检查API错误消息
 		var apiErr apiError
 		if err := json.Unmarshal(body, &apiErr); err == nil {
 			if apiErr.Error != "" || apiErr.Message != "" {
@@ -75,33 +75,43 @@ func (d *CFImgBed) doRequest(method, urlPath string, callback func(*resty.Reques
 	return nil, fmt.Errorf("max retries exceeded for %s %s", method, urlPath)
 }
 
-func calculateSHA256(file model.FileStreamer) (string, error) {
-	if cached := file.GetFile(); cached != nil {
+// 【新增】合并前置数据准备：优先复用底层哈希，降低读取 I/O，并一并获取 fileSample
+func prepareHFUploadData(file model.FileStreamer) (string, string, error) {
+	// HF 直传和分片需要 Seek，因此必须要缓存（且因为只调用一次，放这里很安全）
+	if file.GetFile() == nil {
+		if _, err := file.CacheFullAndWriter(nil, nil); err != nil {
+			return "", "", fmt.Errorf("cache file for HF upload: %w", err)
+		}
+	}
+
+	cached := file.GetFile()
+
+	// 1. 获取 SHA256：优先尝试从 OpenList 底层缓存对象中提取
+	sha256Hex := file.GetHash().GetHash(utils.SHA256)
+	if len(sha256Hex) == 0 {
+		log.Debug("SHA256 not found in HashInfo, calculating from cached file")
 		if _, err := cached.Seek(0, io.SeekStart); err != nil {
-			return "", fmt.Errorf("seek cached file: %w", err)
+			return "", "", fmt.Errorf("seek file for sha256: %w", err)
 		}
 		hash := sha256.New()
 		if _, err := io.Copy(hash, cached); err != nil {
-			return "", fmt.Errorf("calculate SHA256: %w", err)
+			return "", "", fmt.Errorf("calculate SHA256: %w", err)
 		}
-		return hex.EncodeToString(hash.Sum(nil)), nil
+		sha256Hex = hex.EncodeToString(hash.Sum(nil))
 	}
-	return "", fmt.Errorf("file not cached")
-}
 
-func getFileSample(file model.FileStreamer) (string, error) {
-	if cached := file.GetFile(); cached != nil {
-		if _, err := cached.Seek(0, io.SeekStart); err != nil {
-			return "", fmt.Errorf("seek cached file: %w", err)
-		}
-		sample := make([]byte, fileSampleSize)
-		n, err := io.ReadFull(cached, sample)
-		if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-			return "", fmt.Errorf("read file sample: %w", err)
-		}
-		return base64.StdEncoding.EncodeToString(sample[:n]), nil
+	// 2. 获取 fileSample：仅读取前 512 字节
+	if _, err := cached.Seek(0, io.SeekStart); err != nil {
+		return "", "", fmt.Errorf("seek file for sample: %w", err)
 	}
-	return "", fmt.Errorf("file not cached")
+	sampleBuf := make([]byte, fileSampleSize)
+	n, err := io.ReadFull(cached, sampleBuf)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return "", "", fmt.Errorf("read file sample: %w", err)
+	}
+	sampleBase64 := base64.StdEncoding.EncodeToString(sampleBuf[:n])
+
+	return sha256Hex, sampleBase64, nil
 }
 
 func getUploadDir(d *CFImgBed, dstDir model.Obj) string {
@@ -128,4 +138,10 @@ func stripRootPrefix(p, rootPath string) string {
 		return strings.TrimPrefix(p, prefix)
 	}
 	return p
+}
+
+// 辅助函数：安全转义 MIME Header 中的特殊字符
+var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
+func escapeQuotes(s string) string {
+	return quoteEscaper.Replace(s)
 }
